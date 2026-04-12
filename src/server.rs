@@ -1,5 +1,5 @@
 use rmcp::handler::server::router::tool::ToolRouter;
-use rmcp::handler::server::wrapper::{Json, Parameters};
+use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{ServerCapabilities, ServerInfo};
 use rmcp::schemars::JsonSchema;
 use rmcp::serde_json;
@@ -29,7 +29,7 @@ struct ReadNoteParams {
     path: String,
 }
 
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize)]
 struct ReadNoteResult {
     path: String,
     frontmatter: Option<serde_json::Value>,
@@ -39,7 +39,7 @@ struct ReadNoteResult {
     title: Option<String>,
 }
 
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize)]
 struct LinkInfo {
     target: String,
     heading: Option<String>,
@@ -62,14 +62,14 @@ struct ListNotesParams {
     frontmatter_filter: Option<String>,
 }
 
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize)]
 struct NoteEntry {
     path: String,
     title: Option<String>,
     tags: Vec<String>,
 }
 
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize)]
 struct ListNotesResult {
     notes: Vec<NoteEntry>,
     count: usize,
@@ -87,19 +87,19 @@ struct SearchNotesParams {
     max_results: Option<usize>,
 }
 
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize)]
 struct SearchNotesResult {
     results: Vec<SearchFileResult>,
     count: usize,
 }
 
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize)]
 struct SearchFileResult {
     path: String,
     matches: Vec<MatchInfo>,
 }
 
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize)]
 struct MatchInfo {
     line_number: usize,
     line: String,
@@ -113,7 +113,7 @@ struct GetLinksParams {
     path: String,
 }
 
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize)]
 struct LinksResult {
     path: String,
     outgoing: Vec<LinkInfo>,
@@ -130,13 +130,13 @@ struct QueryFrontmatterParams {
     folder: Option<String>,
 }
 
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize)]
 struct FrontmatterMatch {
     path: String,
     frontmatter: serde_json::Value,
 }
 
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize)]
 struct QueryFrontmatterResult {
     matches: Vec<FrontmatterMatch>,
     count: usize,
@@ -152,7 +152,7 @@ struct WriteNoteParams {
     overwrite: Option<bool>,
 }
 
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize)]
 struct WriteNoteResult {
     path: String,
     created: bool,
@@ -168,23 +168,24 @@ fn frontmatter_value_matches(field: &serde_json::Value, expected: &str) -> bool 
 #[tool_router]
 impl Notal {
     #[tool(description = "Read a note's content, frontmatter, tags, and wikilinks")]
-    fn read_note(&self, Parameters(params): Parameters<ReadNoteParams>) -> Result<Json<ReadNoteResult>, String> {
+    fn read_note(&self, Parameters(params): Parameters<ReadNoteParams>) -> Result<String, String> {
         let path = vault::resolve_path(&self.vault_root, &params.path).map_err(|e| e.to_string())?;
         let content = vault::read_note(&path).map_err(|e| e.to_string())?;
         let parsed = parser::parse_note(&content);
 
-        Ok(Json(ReadNoteResult {
+        let result = ReadNoteResult {
             path: vault::relative_path(&self.vault_root, &path),
             frontmatter: parsed.frontmatter,
             body: parsed.body,
             tags: parsed.tags,
             links: parsed.links.into_iter().map(LinkInfo::from).collect(),
             title: parsed.title,
-        }))
+        };
+        serde_json::to_string(&result).map_err(|e| e.to_string())
     }
 
     #[tool(description = "List notes in the vault, optionally filtered by folder, tag, or frontmatter")]
-    fn list_notes(&self, Parameters(params): Parameters<ListNotesParams>) -> Result<Json<ListNotesResult>, String> {
+    fn list_notes(&self, Parameters(params): Parameters<ListNotesParams>) -> Result<String, String> {
         let notes = vault::walk_notes(&self.vault_root, params.folder.as_deref());
 
         // Parse frontmatter filter if given: "key=value"
@@ -240,11 +241,11 @@ impl Notal {
 
         entries.sort_by(|a, b| a.path.cmp(&b.path));
         let count = entries.len();
-        Ok(Json(ListNotesResult { notes: entries, count }))
+        serde_json::to_string(&ListNotesResult { notes: entries, count }).map_err(|e| e.to_string())
     }
 
     #[tool(description = "Search notes by text or regex pattern, returning matching lines with context")]
-    fn search_notes(&self, Parameters(params): Parameters<SearchNotesParams>) -> Result<Json<SearchNotesResult>, String> {
+    fn search_notes(&self, Parameters(params): Parameters<SearchNotesParams>) -> Result<String, String> {
         let re = regex::Regex::new(&params.query).unwrap_or_else(|_| {
             regex::Regex::new(&regex::escape(&params.query)).unwrap()
         });
@@ -288,11 +289,11 @@ impl Notal {
         }
 
         let count = results.len();
-        Ok(Json(SearchNotesResult { results, count }))
+        serde_json::to_string(&SearchNotesResult { results, count }).map_err(|e| e.to_string())
     }
 
     #[tool(description = "Get outgoing wikilinks from a note and backlinks from other notes pointing to it")]
-    fn get_links(&self, Parameters(params): Parameters<GetLinksParams>) -> Result<Json<LinksResult>, String> {
+    fn get_links(&self, Parameters(params): Parameters<GetLinksParams>) -> Result<String, String> {
         let path = vault::resolve_path(&self.vault_root, &params.path).map_err(|e| e.to_string())?;
         let content = vault::read_note(&path).map_err(|e| e.to_string())?;
 
@@ -321,15 +322,15 @@ impl Notal {
             }
         }
 
-        Ok(Json(LinksResult {
+        serde_json::to_string(&LinksResult {
             path: vault::relative_path(&self.vault_root, &path),
             outgoing,
             backlinks,
-        }))
+        }).map_err(|e| e.to_string())
     }
 
     #[tool(description = "Find notes matching a frontmatter field and optional value")]
-    fn query_frontmatter(&self, Parameters(params): Parameters<QueryFrontmatterParams>) -> Result<Json<QueryFrontmatterResult>, String> {
+    fn query_frontmatter(&self, Parameters(params): Parameters<QueryFrontmatterParams>) -> Result<String, String> {
         let notes = vault::walk_notes(&self.vault_root, params.folder.as_deref());
         let mut results = Vec::new();
 
@@ -357,21 +358,21 @@ impl Notal {
         }
 
         let count = results.len();
-        Ok(Json(QueryFrontmatterResult { matches: results, count }))
+        serde_json::to_string(&QueryFrontmatterResult { matches: results, count }).map_err(|e| e.to_string())
     }
 
     #[tool(description = "Create or update a note in the vault")]
-    fn write_note(&self, Parameters(params): Parameters<WriteNoteParams>) -> Result<Json<WriteNoteResult>, String> {
+    fn write_note(&self, Parameters(params): Parameters<WriteNoteParams>) -> Result<String, String> {
         let path = vault::resolve_path(&self.vault_root, &params.path).map_err(|e| e.to_string())?;
         let existed = path.exists();
         let bytes = vault::write_note(&path, &params.content, params.overwrite.unwrap_or(false))
             .map_err(|e| e.to_string())?;
 
-        Ok(Json(WriteNoteResult {
+        serde_json::to_string(&WriteNoteResult {
             path: vault::relative_path(&self.vault_root, &path),
             created: !existed,
             bytes_written: bytes,
-        }))
+        }).map_err(|e| e.to_string())
     }
 }
 
