@@ -3,13 +3,9 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    fenix = {
-      url = "github:nix-community/fenix";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
   };
 
-  outputs = {self, nixpkgs, fenix, ...}: let
+  outputs = {self, nixpkgs, ...}: let
     forAllSystems = nixpkgs.lib.genAttrs ["x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin"];
   in {
     packages = forAllSystems (system: let
@@ -22,22 +18,6 @@
         cargoHash = "sha256-W0u6Qfn22/72JqwsUdEWo6gvivL2g0Fv+pT0jpOJ5Yc=";
       };
       default = self.packages.${system}.notal;
-    });
-
-    devShells = forAllSystems (system: let
-      pkgs = nixpkgs.legacyPackages.${system};
-      toolchain = fenix.packages.${system}.stable.withComponents [
-        "cargo" "clippy" "rust-src" "rustc" "rustfmt"
-      ];
-    in {
-      default = pkgs.mkShell {
-        nativeBuildInputs = [
-          toolchain
-          fenix.packages.${system}.rust-analyzer
-          pkgs.pkg-config
-          pkgs.cargo-expand
-        ];
-      };
     });
   };
 }
