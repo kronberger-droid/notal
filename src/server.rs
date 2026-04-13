@@ -27,6 +27,10 @@ impl Notal {
 struct ReadNoteParams {
     /// Path relative to vault root (e.g. "Projects/my-note.md"). Auto-appends .md if missing.
     path: String,
+    /// Maximum number of body lines to return. Omit for full content.
+    max_lines: Option<usize>,
+    /// When true, return only metadata (frontmatter, tags, links, title) with empty body.
+    metadata_only: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -85,6 +89,8 @@ struct SearchNotesParams {
     context_lines: Option<usize>,
     /// Maximum number of matching files (default: 20).
     max_results: Option<usize>,
+    /// Maximum matches to return per file (default: 10).
+    max_matches_per_file: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -97,6 +103,8 @@ struct SearchNotesResult {
 struct SearchFileResult {
     path: String,
     matches: Vec<MatchInfo>,
+    /// True if more matches existed in this file but were not returned.
+    truncated: bool,
 }
 
 #[derive(Serialize)]
@@ -111,6 +119,8 @@ struct MatchInfo {
 struct GetLinksParams {
     /// Path to the note (relative to vault root).
     path: String,
+    /// Include backlinks from other notes (requires full vault scan). Default: true.
+    backlinks: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -173,10 +183,23 @@ impl Notal {
         let content = vault::read_note(&path).map_err(|e| e.to_string())?;
         let parsed = parser::parse_note(&content);
 
+        let body = if params.metadata_only.unwrap_or(false) {
+            String::new()
+        } else if let Some(max) = params.max_lines {
+            let lines: Vec<&str> = parsed.body.lines().collect();
+            if lines.len() > max {
+                format!("{}\n\n... ({} more lines)", lines[..max].join("\n"), lines.len() - max)
+            } else {
+                parsed.body
+            }
+        } else {
+            parsed.body
+        };
+
         let result = ReadNoteResult {
             path: vault::relative_path(&self.vault_root, &path),
             frontmatter: parsed.frontmatter,
-            body: parsed.body,
+            body,
             tags: parsed.tags,
             links: parsed.links.into_iter().map(LinkInfo::from).collect(),
             title: parsed.title,
@@ -263,10 +286,16 @@ impl Notal {
                 Err(_) => continue,
             };
 
+            let max_per_file = params.max_matches_per_file.unwrap_or(10);
             let lines: Vec<&str> = content.lines().collect();
             let mut matches = Vec::new();
+            let mut truncated = false;
 
             for (i, line) in lines.iter().enumerate() {
+                if matches.len() >= max_per_file {
+                    truncated = true;
+                    break;
+                }
                 if re.is_match(line) {
                     let start = i.saturating_sub(ctx);
                     let end = (i + ctx + 1).min(lines.len());
@@ -284,6 +313,7 @@ impl Notal {
                 results.push(SearchFileResult {
                     path: vault::relative_path(&self.vault_root, &path),
                     matches,
+                    truncated,
                 });
             }
         }
@@ -302,25 +332,29 @@ impl Notal {
             .map(LinkInfo::from)
             .collect();
 
-        // Find backlinks: scan all notes for wikilinks targeting this note
-        let note_stem = path.file_stem()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_default();
+        let backlinks = if params.backlinks.unwrap_or(true) {
+            let note_stem = path.file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
 
-        let all_notes = vault::walk_notes(&self.vault_root, None);
-        let mut backlinks = Vec::new();
+            let all_notes = vault::walk_notes(&self.vault_root, None);
+            let mut backlinks = Vec::new();
 
-        for other_path in all_notes {
-            if other_path == path { continue; }
-            let other_content = match vault::read_note(&other_path) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-            let links = parser::extract_wikilinks(&other_content);
-            if links.iter().any(|l| l.target == note_stem) {
-                backlinks.push(vault::relative_path(&self.vault_root, &other_path));
+            for other_path in all_notes {
+                if other_path == path { continue; }
+                let other_content = match vault::read_note(&other_path) {
+                    Ok(c) => c,
+                    Err(_) => continue,
+                };
+                let links = parser::extract_wikilinks(&other_content);
+                if links.iter().any(|l| l.target == note_stem) {
+                    backlinks.push(vault::relative_path(&self.vault_root, &other_path));
+                }
             }
-        }
+            backlinks
+        } else {
+            Vec::new()
+        };
 
         serde_json::to_string(&LinksResult {
             path: vault::relative_path(&self.vault_root, &path),

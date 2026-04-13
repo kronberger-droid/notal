@@ -64,13 +64,18 @@ pub fn parse_frontmatter(content: &str) -> (Option<serde_yaml::Value>, &str) {
 
 /// Iterate over non-code-block lines in markdown content.
 fn body_lines(content: &str) -> impl Iterator<Item = &str> {
-    let mut in_code_block = false;
+    let mut fence_type: Option<&'static str> = None;
     content.lines().filter(move |line| {
-        if line.starts_with("```") {
-            in_code_block = !in_code_block;
-            return false;
+        let is_backtick = line.starts_with("```");
+        let is_tilde = line.starts_with("~~~");
+        match fence_type {
+            None if is_backtick => { fence_type = Some("```"); false }
+            None if is_tilde => { fence_type = Some("~~~"); false }
+            Some("```") if is_backtick => { fence_type = None; false }
+            Some("~~~") if is_tilde => { fence_type = None; false }
+            Some(_) => false,
+            None => true,
         }
-        !in_code_block
     })
 }
 
@@ -172,6 +177,24 @@ mod tests {
         let links = extract_wikilinks(content);
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].target, "Real Link");
+    }
+
+    #[test]
+    fn test_tilde_code_block_ignored() {
+        let content = "Before\n~~~\n[[Not A Link]] #fake-tag\n~~~\n[[Real Link]]";
+        let links = extract_wikilinks(content);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "Real Link");
+        let tags = extract_tags(content);
+        assert!(!tags.contains(&"fake-tag".to_string()));
+    }
+
+    #[test]
+    fn test_mixed_fences_not_cross_closed() {
+        let content = "Before\n```\n[[Hidden]]\n~~~\n[[Still Hidden]]\n```\n[[Visible]]";
+        let links = extract_wikilinks(content);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "Visible");
     }
 
     #[test]
